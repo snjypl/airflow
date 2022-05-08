@@ -19,10 +19,12 @@ import multiprocessing as mp
 import time
 from typing import List, Tuple, Union
 
-from airflow_breeze.build_image.ci.build_ci_params import BuildCiParams
-from airflow_breeze.build_image.prod.build_prod_params import BuildProdParams
+from airflow_breeze.params.build_ci_params import BuildCiParams
+from airflow_breeze.params.build_prod_params import BuildProdParams
 from airflow_breeze.utils.console import get_console
+from airflow_breeze.utils.mark_image_as_refreshed import mark_image_as_refreshed
 from airflow_breeze.utils.parallel import check_async_run_results
+from airflow_breeze.utils.registry import login_to_docker_registry
 from airflow_breeze.utils.run_tests import verify_an_image
 from airflow_breeze.utils.run_utils import run_command
 
@@ -80,7 +82,7 @@ def run_pull_image(
     poll_time: float,
 ) -> Tuple[int, str]:
     """
-    Pull image soecified.
+    Pull image specified.
     :param image_params: Image parameters.
     :param dry_run: whether it's dry run
     :param verbose: whether it's verbose
@@ -95,6 +97,7 @@ def run_pull_image(
         f"with wait for image: {wait_for_image}[/]\n"
     )
     while True:
+        login_to_docker_registry(image_params, dry_run=dry_run)
         command_to_run = ["docker", "pull", image_params.airflow_image_name_with_tag]
         command_result = run_command(
             command_to_run,
@@ -138,10 +141,15 @@ def run_pull_image(
                     dry_run=dry_run,
                     check=False,
                 )
+                if command_result.returncode == 0 and isinstance(image_params, BuildCiParams):
+                    mark_image_as_refreshed(image_params)
             return command_result.returncode, f"Image Python {image_params.python}"
         if wait_for_image:
             if verbose or dry_run:
-                get_console().print(f"\n[info]Waiting for {poll_time} seconds.[/]\n")
+                get_console().print(
+                    f"\n[info]Waiting for {poll_time} seconds for "
+                    f"{image_params.airflow_image_name_with_tag}.[/]\n"
+                )
             time.sleep(poll_time)
             continue
         else:

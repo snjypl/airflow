@@ -24,14 +24,16 @@ import sys
 from distutils.version import StrictVersion
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Mapping, Optional, Union
+from typing import Dict, List, Mapping, Optional, Union
 
+from airflow_breeze.utils.ci_group import ci_group
 from airflow_breeze.utils.console import get_console
 from airflow_breeze.utils.path_utils import AIRFLOW_SOURCES_ROOT
 
 
 def run_command(
     cmd: List[str],
+    title: Optional[str] = None,
     *,
     check: bool = True,
     verbose: bool = False,
@@ -54,6 +56,7 @@ def run_command(
     needed to run the command.
 
     :param cmd: command to run
+    :param title: optional title for the command (otherwise likely title is automatically determined)
     :param check: whether to check status value and run exception (same as POpem)
     :param verbose: print commands when running
     :param dry_run: do not execute "the" command - just print what would happen
@@ -66,13 +69,21 @@ def run_command(
     workdir: str = str(cwd) if cwd else os.getcwd()
     if verbose or dry_run:
         command_to_print = ' '.join(shlex.quote(c) for c in cmd)
-        # if we pass environment variables to execute, then
-        env_to_print = ' '.join(f'{key}="{val}"' for (key, val) in env.items()) if env else ''
-        if env_to_print:
-            env_to_print += ' '
-        get_console().print(f"\n[info]Working directory {workdir} [/]\n")
-        # Soft wrap allows to copy&paste and run resulting output as it has no hard EOL
-        get_console().print(f"\n[info]{env_to_print}{command_to_print}[/]\n", soft_wrap=True)
+        if not title:
+            # Heuristics to get a short but explanatory title showing what the command does
+            # If title is not provided explicitly
+            title = ' '.join(
+                shlex.quote(c)
+                for c in cmd
+                if not c.startswith('-')  # exclude options
+                and (c[0] != "/" or c.endswith(".sh"))  # exclude volumes
+                and not c == "never"  # exclude --pull never
+            )
+        env_to_print = get_environments_to_print(env)
+        with ci_group(title=f"Running {title}"):
+            get_console().print(f"\n[info]Working directory {workdir} [/]\n")
+            # Soft wrap allows to copy&paste and run resulting output as it has no hard EOL
+            get_console().print(f"\n[info]{env_to_print}{command_to_print}[/]\n", soft_wrap=True)
         if dry_run:
             return subprocess.CompletedProcess(cmd, returncode=0)
     try:
@@ -101,6 +112,23 @@ def run_command(
         if check:
             raise
         return ex
+
+
+def get_environments_to_print(env: Optional[Mapping[str, str]]):
+    if not env:
+        return ""
+    system_env: Dict[str, str] = {}
+    my_env: Dict[str, str] = {}
+    for key, val in env.items():
+        if os.environ.get(key) == val:
+            system_env[key] = val
+        else:
+            my_env[key] = val
+    env_to_print = ''.join(f'{key}="{val}" \\\n' for (key, val) in sorted(system_env.items()))
+    env_to_print += r"""\
+"""
+    env_to_print += ''.join(f'{key}="{val}" \\\n' for (key, val) in sorted(my_env.items()))
+    return env_to_print
 
 
 def assert_pre_commit_installed(verbose: bool):
@@ -172,7 +200,9 @@ def get_filesystem_type(filepath):
 def instruct_build_image(python: str):
     """Print instructions to the user that they should build the image"""
     get_console().print(f'[warning]\nThe CI image for ' f'python version {python} may be outdated[/]\n')
-    print(f"\n[info]Please run at the earliest convenience:[/]\n\nbreeze build-image --python {python}\n\n")
+    get_console().print(
+        f"\n[info]Please run at the earliest convenience:[/]\n\nbreeze build-image --python {python}\n\n"
+    )
 
 
 @contextlib.contextmanager
