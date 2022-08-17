@@ -515,6 +515,7 @@ class KubernetesExecutor(BaseExecutor):
                 TaskInstance.map_index == ti.map_index,
             ).update({TaskInstance.state: State.SCHEDULED})
 
+            self.running.discard(ti.key)
     def start(self) -> None:
         """Starts the executor"""
         self.log.info('Start Kubernetes executor')
