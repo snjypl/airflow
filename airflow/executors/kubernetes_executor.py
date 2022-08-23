@@ -460,8 +460,6 @@ class KubernetesExecutor(BaseExecutor):
         query = session.query(TaskInstance).filter(
             TaskInstance.state == State.QUEUED, TaskInstance.queued_by_job_id == self.job_id
         )
-        if self.kubernetes_queue:
-            query = query.filter(TaskInstance.queue == self.kubernetes_queue)
         queued_tis: List[TaskInstance] = query.all()
         self.log.info('Found %s queued task instances', len(queued_tis))
 
