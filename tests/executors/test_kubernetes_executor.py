@@ -703,6 +703,7 @@ class TestKubernetesExecutor:
         session.flush()
 
         executor = self.kubernetes_executor
+        executor.job_id = 1
         executor.kube_client = mock_kube_client
         executor.clear_not_launched_queued_tasks(session=session)
 
@@ -735,6 +736,8 @@ class TestKubernetesExecutor:
         session.flush()
 
         executor = self.kubernetes_executor
+        executor.job_id = 1
+        executor.kubernetes_queue = kubernetes_queue
         executor.kube_client = mock_kube_client
         executor.clear_not_launched_queued_tasks(session=session)
 
@@ -771,6 +774,7 @@ class TestKubernetesExecutor:
         session.flush()
 
         executor = self.kubernetes_executor
+        executor.job_id = 1
         executor.kube_client = mock_kube_client
         executor.clear_not_launched_queued_tasks(session=session)
 
@@ -799,6 +803,31 @@ class TestKubernetesExecutor:
             ],
             any_order=True,
         )
+
+    def test_clear_not_launched_queued_tasks_not_launched_other_queue(
+        self, dag_maker, create_dummy_dag, session
+    ):
+        """Queued TI has no pod, but it is not queued for the k8s executor"""
+        mock_kube_client = mock.MagicMock()
+        mock_kube_client.list_namespaced_pod.return_value = k8s.V1PodList(items=[])
+
+        create_dummy_dag(dag_id="test_clear", task_id="task1", with_dagrun_type=None)
+        dag_run = dag_maker.create_dagrun()
+
+        ti = dag_run.task_instances[0]
+        ti.state = State.QUEUED
+        ti.queued_by_job_id = 1
+        session.flush()
+
+        executor = self.kubernetes_executor
+        executor.job_id = 1
+        executor.kubernetes_queue = 'kubernetes'
+        executor.kube_client = mock_kube_client
+        executor.clear_not_launched_queued_tasks(session=session)
+
+        ti.refresh_from_db()
+        assert ti.state == State.QUEUED
+        assert mock_kube_client.list_namespaced_pod.call_count == 0
 
 
 class TestKubernetesJobWatcher(unittest.TestCase):
