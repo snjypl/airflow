@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, Tuple
 import pendulum
 from dateutil import relativedelta
 from sqlalchemy import and_, event, false, nullsfirst, or_, tuple_
+from sqlalchemy.dialects import mssql
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm.session import Session
 from sqlalchemy.sql import ColumnElement
@@ -37,7 +38,7 @@ log = logging.getLogger(__name__)
 
 utc = pendulum.tz.timezone('UTC')
 
-using_mysql = conf.get('database', 'sql_alchemy_conn').lower().startswith('mysql')
+using_mysql = conf.get_mandatory_value('database', 'sql_alchemy_conn').lower().startswith('mysql')
 
 
 class UtcDateTime(TypeDecorator):
@@ -57,6 +58,8 @@ class UtcDateTime(TypeDecorator):
     """
 
     impl = DateTime(timezone=True)
+
+    cache_ok = True
 
     def process_bind_param(self, value, dialect):
         if value is not None:
@@ -92,6 +95,11 @@ class UtcDateTime(TypeDecorator):
 
         return value
 
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'mssql':
+            return mssql.DATETIME2(precision=6)
+        return super().load_dialect_impl(dialect)
+
 
 class ExtendedJSON(TypeDecorator):
     """
@@ -100,6 +108,8 @@ class ExtendedJSON(TypeDecorator):
     """
 
     impl = Text
+
+    cache_ok = True
 
     def db_supports_json(self):
         """Checks if the database supports JSON (i.e. is NOT MSSQL)"""
@@ -142,6 +152,8 @@ class Interval(TypeDecorator):
     """Base class representing a time interval."""
 
     impl = Text
+
+    cache_ok = True
 
     attr_keys = {
         datetime.timedelta: ('days', 'seconds', 'microseconds'),

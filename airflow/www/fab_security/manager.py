@@ -221,9 +221,7 @@ class BaseSecurityManager:
         # LDAP Config
         if self.auth_type == AUTH_LDAP:
             if "AUTH_LDAP_SERVER" not in app.config:
-                raise Exception(
-                    "No AUTH_LDAP_SERVER defined on config" " with AUTH_LDAP authentication type."
-                )
+                raise Exception("No AUTH_LDAP_SERVER defined on config with AUTH_LDAP authentication type.")
             app.config.setdefault("AUTH_LDAP_SEARCH", "")
             app.config.setdefault("AUTH_LDAP_SEARCH_FILTER", "")
             app.config.setdefault("AUTH_LDAP_APPEND_DOMAIN", "")
@@ -293,7 +291,7 @@ class BaseSecurityManager:
         """
         jwt_manager = JWTManager()
         jwt_manager.init_app(app)
-        jwt_manager.user_loader_callback_loader(self.load_user_jwt)
+        jwt_manager.user_lookup_loader(self.load_user_jwt)
         return jwt_manager
 
     def create_builtin_roles(self):
@@ -656,6 +654,18 @@ class BaseSecurityManager:
                 "email": data.get("email", ""),
                 "role_keys": data.get("groups", []),
             }
+        # for Keycloak
+        if provider in ["keycloak", "keycloak_before_17"]:
+            me = self.appbuilder.sm.oauth_remotes[provider].get("openid-connect/userinfo")
+            me.raise_for_status()
+            data = me.json()
+            log.debug("User info from Keycloak: %s", data)
+            return {
+                "username": data.get("preferred_username", ""),
+                "first_name": data.get("given_name", ""),
+                "last_name": data.get("family_name", ""),
+                "email": data.get("email", ""),
+            }
         else:
             return {}
 
@@ -787,7 +797,7 @@ class BaseSecurityManager:
         if self.appbuilder.app.config.get("FAB_ADD_SECURITY_PERMISSION_VIEWS_VIEW", True):
             self.appbuilder.add_view(
                 self.permissionmodelview,
-                "Permissions",
+                "Permission Pairs",
                 icon="fa-link",
                 label=_("Permissions"),
                 category="Security",
@@ -822,12 +832,15 @@ class BaseSecurityManager:
 
     def update_user_auth_stat(self, user, success=True):
         """
-        Update authentication successful to user.
-
+        Update user authentication stats upon successful/unsuccessful
+        authentication attempts.
         :param user:
-            The authenticated user model
+            The identified (but possibly not successfully authenticated) user
+            model
         :param success:
-            Default to true, if false increments fail_login_count on user model
+            Defaults to true, if true increments login_count, updates
+            last_login, and resets fail_login_count to 0, if false increments
+            fail_login_count on user model.
         """
         if not user.login_count:
             user.login_count = 0
@@ -835,10 +848,10 @@ class BaseSecurityManager:
             user.fail_login_count = 0
         if success:
             user.login_count += 1
+            user.last_login = datetime.datetime.now()
             user.fail_login_count = 0
         else:
             user.fail_login_count += 1
-        user.last_login = datetime.datetime.now()
         self.update_user(user)
 
     def auth_user_db(self, username, password):
@@ -967,9 +980,7 @@ class BaseSecurityManager:
             con.simple_bind_s(self.auth_ldap_bind_user, self.auth_ldap_bind_password)
             log.debug(f"LDAP bind indirect SUCCESS with username: '{self.auth_ldap_bind_user}'")
         except ldap.INVALID_CREDENTIALS as ex:
-            log.error(
-                "AUTH_LDAP_BIND_USER and AUTH_LDAP_BIND_PASSWORD are" " not valid LDAP bind credentials"
-            )
+            log.error("AUTH_LDAP_BIND_USER and AUTH_LDAP_BIND_PASSWORD are not valid LDAP bind credentials")
             raise ex
 
     @staticmethod
@@ -1028,12 +1039,6 @@ class BaseSecurityManager:
 
         try:
             # LDAP certificate settings
-            if self.auth_ldap_allow_self_signed:
-                ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
-                ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
-            elif self.auth_ldap_tls_demand:
-                ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_DEMAND)
-                ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
             if self.auth_ldap_tls_cacertdir:
                 ldap.set_option(ldap.OPT_X_TLS_CACERTDIR, self.auth_ldap_tls_cacertdir)
             if self.auth_ldap_tls_cacertfile:
@@ -1042,6 +1047,12 @@ class BaseSecurityManager:
                 ldap.set_option(ldap.OPT_X_TLS_CERTFILE, self.auth_ldap_tls_certfile)
             if self.auth_ldap_tls_keyfile:
                 ldap.set_option(ldap.OPT_X_TLS_KEYFILE, self.auth_ldap_tls_keyfile)
+            if self.auth_ldap_allow_self_signed:
+                ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
+                ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
+            elif self.auth_ldap_tls_demand:
+                ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_DEMAND)
+                ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
 
             # Initialise LDAP connection
             con = ldap.initialize(self.auth_ldap_server)
@@ -1355,7 +1366,10 @@ class BaseSecurityManager:
             return self._get_user_permission_resources(g.user, "menu_access", resource_names=menu_names)
         elif current_user_jwt:
             return self._get_user_permission_resources(
-                current_user_jwt, "menu_access", resource_names=menu_names
+                # the current_user_jwt is a lazy proxy, so we need to ignore type checking
+                current_user_jwt,  # type: ignore[arg-type]
+                "menu_access",
+                resource_names=menu_names,
             )
         else:
             return self._get_user_permission_resources(None, "menu_access", resource_names=menu_names)
@@ -1661,9 +1675,9 @@ class BaseSecurityManager:
         """Load user by ID"""
         return self.get_user_by_id(int(user_id))
 
-    def load_user_jwt(self, user_id):
-        """Load user JWT"""
-        user = self.load_user(user_id)
+    def load_user_jwt(self, _jwt_header, jwt_data):
+        identity = jwt_data["sub"]
+        user = self.load_user(identity)
         # Set flask g.user to JWT user, we can't do it on before request
         g.user = user
         return user

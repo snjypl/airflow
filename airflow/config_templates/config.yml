@@ -62,9 +62,10 @@
       default: "SequentialExecutor"
     - name: parallelism
       description: |
-        This defines the maximum number of task instances that can run concurrently in Airflow
-        regardless of scheduler count and worker count. Generally, this value is reflective of
-        the number of task instances with the running state in the metadata database.
+        This defines the maximum number of task instances that can run concurrently per scheduler in
+        Airflow, regardless of the worker count. Generally this value, multiplied by the number of
+        schedulers in your cluster, is the maximum number of task instances with the running
+        state in the metadata database.
       version_added: ~
       type: string
       example: ~
@@ -450,7 +451,7 @@
         Check connection at the start of each connection pool checkout.
         Typically, this is a simple statement like "SELECT 1".
         More information here:
-        https://docs.sqlalchemy.org/en/13/core/pooling.html#disconnect-handling-pessimistic
+        https://docs.sqlalchemy.org/en/14/core/pooling.html#disconnect-handling-pessimistic
       version_added: 2.3.0
       type: string
       example: ~
@@ -468,7 +469,7 @@
         Import path for connect args in SqlAlchemy. Defaults to an empty dict.
         This is useful when you want to configure db engine args that SqlAlchemy won't parse
         in connection string.
-        See https://docs.sqlalchemy.org/en/13/core/engines.html#sqlalchemy.create_engine.params.connect_args
+        See https://docs.sqlalchemy.org/en/14/core/engines.html#sqlalchemy.create_engine.params.connect_args
       version_added: 2.3.0
       type: string
       example: ~
@@ -829,7 +830,7 @@
         Comma separated list of auth backends to authenticate users of the API. See
         https://airflow.apache.org/docs/apache-airflow/stable/security/api.html for possible values.
         ("airflow.api.auth.backend.default" allows all requests for historic reasons)
-      version_added: ~
+      version_added: 2.3.0
       type: string
       example: ~
       default: "airflow.api.auth.backend.session"
@@ -1767,12 +1768,23 @@
       default: "True"
     - name: task_adoption_timeout
       description: |
-        Time in seconds after which Adopted tasks are cleared by CeleryExecutor. This is helpful to clear
-        stalled tasks.
+        Time in seconds after which adopted tasks which are queued in celery are assumed to be stalled,
+        and are automatically rescheduled. This setting does the same thing as ``stalled_task_timeout`` but
+        applies specifically to adopted tasks only. When set to 0, the ``stalled_task_timeout`` setting
+        also applies to adopted tasks.
       version_added: 2.0.0
       type: integer
       example: ~
       default: "600"
+    - name: stalled_task_timeout
+      description: |
+        Time in seconds after which tasks queued in celery are assumed to be stalled, and are automatically
+        rescheduled. Adopted tasks will instead use the ``task_adoption_timeout`` setting if specified.
+        When set to 0, automatic clearing of stalled tasks is disabled.
+      version_added: 2.3.1
+      type: integer
+      example: ~
+      default: "0"
     - name: task_publish_max_retries
       description: |
         The Maximum number of retries for publishing task messages to the broker when failing
@@ -2430,7 +2442,7 @@
     - name: default_timeout
       description: |
         Sensor default timeout, 7 days by default (7 * 24 * 60 * 60).
-      version_added: 2.2.1
+      version_added: 2.3.0
       type: float
       example: ~
       default: "604800"

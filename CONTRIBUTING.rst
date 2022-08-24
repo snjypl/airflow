@@ -360,33 +360,6 @@ Step 4: Prepare PR
    PR guidelines described in `pull request guidelines <#pull-request-guidelines>`_.
    Create Pull Request! Make yourself ready for the discussion!
 
-5. Depending on "scope" of your changes, your Pull Request might go through one of few paths after approval.
-   We run some non-standard workflow with high degree of automation that allows us to optimize the usage
-   of queue slots in GitHub Actions. Our automated workflows determine the "scope" of changes in your PR
-   and send it through the right path:
-
-   * In case of a "no-code" change, approval will generate a comment that the PR can be merged and no
-     tests are needed. This is usually when the change modifies some non-documentation related RST
-     files (such as this file). No python tests are run and no CI images are built for such PR. Usually
-     it can be approved and merged few minutes after it is submitted (unless there is a big queue of jobs).
-
-   * In case of change involving python code changes or documentation changes, a subset of full test matrix
-     will be executed. This subset of tests perform relevant tests for single combination of python, backend
-     version and only builds one CI image and one PROD image. Here the scope of tests depends on the
-     scope of your changes:
-
-     * when your change does not change "core" of Airflow (Providers, CLI, WWW, Helm Chart) you will get the
-       comment that PR is likely ok to be merged without running "full matrix" of tests. However decision
-       for that is left to committer who approves your change. The committer might set a "full tests needed"
-       label for your PR and ask you to rebase your request or re-run all jobs. PRs with "full tests needed"
-       run full matrix of tests.
-
-     * when your change changes the "core" of Airflow you will get the comment that PR needs full tests and
-       the "full tests needed" label is set for your PR. Additional check is set that prevents from
-       accidental merging of the request until full matrix of tests succeeds for the PR.
-
-   More details about the PR workflow be found in `PULL_REQUEST_WORKFLOW.rst <PULL_REQUEST_WORKFLOW.rst>`_.
-
 
 Step 5: Pass PR Review
 ----------------------
@@ -882,8 +855,6 @@ There are several sets of constraints we keep:
   providers. If you want to manage airflow separately and then add providers individually, you can
   use those. Those constraints are named ``constraints-no-providers-<PYTHON_MAJOR_MINOR_VERSION>.txt``.
 
-We also have constraints with "source-providers" but they are used i
-
 The first two can be used as constraints file when installing Apache Airflow in a repeatable way.
 It can be done from the sources:
 
@@ -891,8 +862,11 @@ from the PyPI package:
 
 .. code-block:: bash
 
-  pip install apache-airflow==2.2.5 \
+  pip install apache-airflow[google,amazon,async]==2.2.5 \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.2.5/constraints-3.7.txt"
+
+The last one can be used to install Airflow in "minimal" mode - i.e when bare Airflow is installed without
+extras.
 
 When you install airflow from sources (in editable mode) you should use "constraints-source-providers"
 instead (this accounts for the case when some providers have not yet been released and have conflicting
@@ -909,14 +883,14 @@ This works also with extras - for example:
 .. code-block:: bash
 
   pip install ".[ssh]" \
-    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints--source-providers-3.7.txt"
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-main/constraints-source-providers-3.7.txt"
 
 
 There are different set of fixed constraint files for different python major/minor versions and you should
 use the right file for the right python version.
 
 If you want to update just airflow dependencies, without paying attention to providers, you can do it using
--no-providers constraint files as well.
+``constraints-no-providers`` constraint files as well.
 
 .. code-block:: bash
 
@@ -1165,8 +1139,20 @@ development machine before continuing with migration.
     $ cd airflow
     $ alembic revision -m "add new field to db"
        Generating
-    ~/airflow/airflow/migrations/versions/12341123_add_new_field_to_db.py
+    ~/airflow/airflow/migrations/versions/a1e23c41f123_add_new_field_to_db.py
 
+Note that migration file names are standardized by pre-commit hook ``update-migration-references``, so that they sort alphabetically and indicate
+the Airflow version in which they first appear (the alembic revision ID is removed). As a result you should expect to see a pre-commit failure
+on the first attempt.  Just stage the modified file and commit again
+(or run the hook manually before committing).
+
+After your new migration file is run through pre-commit it will look like this:
+
+.. code-block::
+
+    1234_A_B_C_add_new_field_to_db.py
+
+This represents that your migration is the 1234th migration and expected for release in Airflow version A.B.C.
 
 Node.js Environment Setup
 =========================

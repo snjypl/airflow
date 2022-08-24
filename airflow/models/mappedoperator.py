@@ -191,6 +191,11 @@ class OperatorPartial:
             warnings.warn(f"Task {task_id} was never mapped!")
 
     def expand(self, **mapped_kwargs: "Mappable") -> "MappedOperator":
+        if not mapped_kwargs:
+            raise TypeError("no arguments to expand against")
+        return self._expand(**mapped_kwargs)
+
+    def _expand(self, **mapped_kwargs: "Mappable") -> "MappedOperator":
         self._expand_called = True
 
         from airflow.operators.empty import EmptyOperator
@@ -300,8 +305,7 @@ class MappedOperator(AbstractOperator):
         if self.dag:
             self.dag.add_task(self)
         for k, v in self.mapped_kwargs.items():
-            if k in self.template_fields:
-                XComArg.apply_upstream_relationship(self, v)
+            XComArg.apply_upstream_relationship(self, v)
         for k, v in self.partial_kwargs.items():
             if k in self.template_fields:
                 XComArg.apply_upstream_relationship(self, v)
@@ -319,6 +323,7 @@ class MappedOperator(AbstractOperator):
             "dag",
             "deps",
             "is_mapped",
+            "mapped_kwargs",  # This is needed to be able to accept XComArg.
             "subdag",
             "task_group",
             "upstream_task_ids",
@@ -795,7 +800,10 @@ class MappedOperator(AbstractOperator):
             if not isinstance(value, MAPPABLE_LITERAL_TYPES):
                 # None literal type encountered, so give up
                 return None
-            total += len(value)
+            if total == 0:
+                total = len(value)
+            else:
+                total *= len(value)
         return total
 
     @cache

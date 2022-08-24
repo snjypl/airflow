@@ -15,6 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import copy
 import logging
 import uuid
 from datetime import date, datetime, timedelta
@@ -118,6 +119,17 @@ class TestBaseOperator:
 
         with pytest.raises(AirflowException, match="missing keyword argument 'test_sub_param'"):
             DummySubClass(default_args=default_args)
+
+    def test_execution_timeout_type(self):
+        with pytest.raises(
+            ValueError, match="execution_timeout must be timedelta object but passed as type: <class 'str'>"
+        ):
+            BaseOperator(task_id='test', execution_timeout="1")
+
+        with pytest.raises(
+            ValueError, match="execution_timeout must be timedelta object but passed as type: <class 'int'>"
+        ):
+            BaseOperator(task_id='test', execution_timeout=1)
 
     def test_incorrect_default_args(self):
         default_args = {'test_param': True, 'extra_param': True}
@@ -983,3 +995,15 @@ def test_mapped_render_template_fields_validating_operator(dag_maker, session):
     assert op.value == "{{ ds }}", "Should not be templated!"
     assert op.arg1 == "{{ ds }}"
     assert op.arg2 == "a"
+
+
+def test_deepcopy():
+    # Test bug when copying an operator attached to a DAG
+    with DAG("dag0", start_date=DEFAULT_DATE) as dag:
+
+        @dag.task
+        def task0():
+            pass
+
+        MockOperator(task_id="task1", arg1=task0())
+    copy.deepcopy(dag)

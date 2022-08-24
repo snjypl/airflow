@@ -767,7 +767,13 @@ class BaseOperator(AbstractOperator, metaclass=BaseOperatorMeta):
         self.email = email
         self.email_on_retry = email_on_retry
         self.email_on_failure = email_on_failure
+
+        if execution_timeout is not None and not isinstance(execution_timeout, timedelta):
+            raise ValueError(
+                f'execution_timeout must be timedelta object but passed as type: {type(execution_timeout)}'
+            )
         self.execution_timeout = execution_timeout
+
         self.on_execute_callback = on_execute_callback
         self.on_failure_callback = on_failure_callback
         self.on_success_callback = on_success_callback
@@ -1134,11 +1140,10 @@ class BaseOperator(AbstractOperator, metaclass=BaseOperatorMeta):
         """
 
     def __deepcopy__(self, memo):
-        """
-        Hack sorting double chained task lists by task_id to avoid hitting
-        max_depth on deepcopy operations.
-        """
+        # Hack sorting double chained task lists by task_id to avoid hitting
+        # max_depth on deepcopy operations.
         sys.setrecursionlimit(5000)  # TODO fix this in a better way
+
         cls = self.__class__
         result = cls.__new__(cls)
         memo[id(self)] = result
@@ -1146,10 +1151,14 @@ class BaseOperator(AbstractOperator, metaclass=BaseOperatorMeta):
         shallow_copy = cls.shallow_copy_attrs + cls._base_operator_shallow_copy_attrs
 
         for k, v in self.__dict__.items():
+            if k == "_BaseOperator__instantiated":
+                # Don't set this until the _end_, as it changes behaviour of __setattr__
+                continue
             if k not in shallow_copy:
                 setattr(result, k, copy.deepcopy(v, memo))
             else:
                 setattr(result, k, copy.copy(v))
+        result.__instantiated = self.__instantiated
         return result
 
     def __getstate__(self):

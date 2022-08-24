@@ -39,7 +39,7 @@ from typing import (
 import attr
 import typing_extensions
 
-from airflow.compat.functools import cache, cached_property
+from airflow.compat.functools import cached_property
 from airflow.exceptions import AirflowException
 from airflow.models.abstractoperator import DEFAULT_RETRIES, DEFAULT_RETRY_DELAY
 from airflow.models.baseoperator import (
@@ -267,6 +267,10 @@ class _TaskDecorator(Generic[Function, OperatorSubclass]):
             op.doc_md = self.function.__doc__
         return XComArg(op)
 
+    @property
+    def __wrapped__(self) -> Function:
+        return self.function
+
     @cached_property
     def function_signature(self):
         return inspect.signature(self.function)
@@ -308,6 +312,9 @@ class _TaskDecorator(Generic[Function, OperatorSubclass]):
             raise TypeError(f"{func}() got unexpected keyword arguments {names}")
 
     def expand(self, **map_kwargs: "Mappable") -> XComArg:
+        if not map_kwargs:
+            raise TypeError("no arguments to expand against")
+
         self._validate_arg_names("expand", map_kwargs)
         prevent_duplicates(self.kwargs, map_kwargs, fail_reason="mapping already partial")
         ensure_xcomarg_return_value(map_kwargs)
@@ -413,14 +420,6 @@ class DecoratedMappedOperator(MappedOperator):
     def __hash__(self):
         return id(self)
 
-    @classmethod
-    @cache
-    def get_serialized_fields(cls):
-        # The magic super() doesn't work here, so we use the explicit form.
-        # Not using super(..., cls) to work around pyupgrade bug.
-        sup = super(DecoratedMappedOperator, DecoratedMappedOperator)
-        return sup.get_serialized_fields() | {"mapped_op_kwargs"}
-
     def __attrs_post_init__(self):
         # The magic super() doesn't work here, so we use the explicit form.
         # Not using super(..., self) to work around pyupgrade bug.
@@ -495,6 +494,10 @@ class Task(Generic[Function]):
 
     function: Function
 
+    @property
+    def __wrapped__(self) -> Function:
+        ...
+
     def expand(self, **kwargs: "Mappable") -> XComArg:
         ...
 
@@ -527,7 +530,7 @@ def task_decorator_factory(
     **kwargs,
 ) -> TaskDecorator:
     """
-    A factory that generates a wrapper that raps a function into an Airflow operator.
+    A factory that generates a wrapper that wraps a function into an Airflow operator.
     Accepts kwargs for operator kwarg. Can be reused in a single DAG.
 
     :param python_callable: Function to decorate

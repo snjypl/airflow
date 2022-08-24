@@ -35,7 +35,7 @@ from kubernetes.client import Configuration, models as k8s
 from kubernetes.client.rest import ApiException
 from urllib3.exceptions import ReadTimeoutError
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, PodReconciliationError
 from airflow.executors.base_executor import NOT_STARTED_MESSAGE, BaseExecutor, CommandType
 from airflow.kubernetes import pod_generator
 from airflow.kubernetes.kube_client import get_kube_client
@@ -109,6 +109,8 @@ class KubernetesJobWatcher(multiprocessing.Process, LoggingMixin):
                 time.sleep(1)
             except Exception:
                 self.log.exception('Unknown error in KubernetesJobWatcher. Failing')
+                self.resource_version = "0"
+                ResourceVersion().resource_version = "0"
                 raise
             else:
                 self.log.warning(
@@ -288,6 +290,7 @@ class AirflowKubernetesScheduler(LoggingMixin):
             self.log.error(
                 'Error while health checking kube watcher process. Process died for unknown reasons'
             )
+            ResourceVersion().resource_version = "0"
             self.kube_watcher = self._make_kube_watcher()
 
     def run_next(self, next_job: KubernetesJobType) -> None:
@@ -297,8 +300,9 @@ class AirflowKubernetesScheduler(LoggingMixin):
         and store relevant info in the current_jobs map so we can track the job's
         status
         """
-        self.log.info('Kubernetes job is %s', str(next_job).replace("\n", " "))
         key, command, kube_executor_config, pod_template_file = next_job
+        self.log.info('Kubernetes job is %s', key)
+
         dag_id, task_id, run_id, try_number, map_index = key
 
         if command[0:3] != ["airflow", "tasks", "run"]:
@@ -438,6 +442,7 @@ class KubernetesExecutor(BaseExecutor):
         self.scheduler_job_id: Optional[str] = None
         self.event_scheduler: Optional[EventScheduler] = None
         self.last_handled: Dict[TaskInstanceKey, float] = {}
+        self.kubernetes_queue: Optional[str] = None
         super().__init__(parallelism=self.kube_config.parallelism)
 
     @provide_session
@@ -460,6 +465,8 @@ class KubernetesExecutor(BaseExecutor):
         query = session.query(TaskInstance).filter(
             TaskInstance.state == State.QUEUED, TaskInstance.queued_by_job_id == self.job_id
         )
+        if self.kubernetes_queue:
+            query = query.filter(TaskInstance.queue == self.kubernetes_queue)
         queued_tis: List[TaskInstance] = query.all()
         self.log.info('Found %s queued task instances', len(queued_tis))
 
@@ -613,6 +620,13 @@ class KubernetesExecutor(BaseExecutor):
                 task = self.task_queue.get_nowait()
                 try:
                     self.kube_scheduler.run_next(task)
+                except PodReconciliationError as e:
+                    self.log.error(
+                        "Pod reconciliation failed, likely due to kubernetes library upgrade. "
+                        "Try clearing the task to re-run.",
+                        exc_info=True,
+                    )
+                    self.fail(task[0], e)
                 except ApiException as e:
 
                     # These codes indicate something is wrong with pod definition; otherwise we assume pod

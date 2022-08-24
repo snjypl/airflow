@@ -57,7 +57,12 @@ from airflow.models import (
     XCom,
 )
 from airflow.models.taskfail import TaskFail
-from airflow.models.taskinstance import TaskInstance, load_error_file, set_error_file
+from airflow.models.taskinstance import (
+    TaskInstance,
+    _executor_config_comparator,
+    load_error_file,
+    set_error_file,
+)
 from airflow.models.taskmap import TaskMap
 from airflow.models.xcom import XCOM_RETURN_KEY
 from airflow.operators.bash import BashOperator
@@ -263,6 +268,12 @@ class TestTaskInstance:
         # op2 should be downstream of both
         assert op2 in op1.downstream_list
         assert op2 in op3.downstream_list
+
+    def test_init_on_load(self, create_task_instance):
+        ti = create_task_instance()
+        # ensure log is correctly created for ORM ti
+        assert ti.log.name == 'airflow.task'
+        assert not ti.test_mode
 
     @patch.object(DAG, 'get_concurrency_reached')
     def test_requeue_over_dag_concurrency(self, mock_concurrency_reached, create_task_instance):
@@ -1067,7 +1078,9 @@ class TestTaskInstance:
 
     def test_xcom_pull_mapped(self, dag_maker, session):
         with dag_maker(dag_id="test_xcom", session=session):
-            task_1 = EmptyOperator.partial(task_id="task_1").expand()
+            # Use the private _expand() method to avoid the empty kwargs check.
+            # We don't care about how the operator runs here, only its presence.
+            task_1 = EmptyOperator.partial(task_id="task_1")._expand()
             EmptyOperator(task_id="task_2")
 
         dagrun = dag_maker.create_dagrun(start_date=timezone.datetime(2016, 6, 1, 0, 0, 0))
@@ -1281,18 +1294,6 @@ class TestTaskInstance:
         assert 1 == ti2.get_num_running_task_instances(session=session)
         assert 1 == ti3.get_num_running_task_instances(session=session)
 
-    # def test_log_url(self):
-    #     now = pendulum.now('Europe/Brussels')
-    #     dag = DAG('dag', start_date=DEFAULT_DATE)
-    #     task = EmptyOperator(task_id='op', dag=dag)
-    #     ti = TI(task=task, execution_date=now)
-    #     d = urllib.parse.parse_qs(
-    #         urllib.parse.urlparse(ti.log_url).query,
-    #         keep_blank_values=True, strict_parsing=True)
-    #     self.assertEqual(d['dag_id'][0], 'dag')
-    #     self.assertEqual(d['task_id'][0], 'op')
-    #     self.assertEqual(pendulum.parse(d['execution_date'][0]), now)
-
     def test_log_url(self, create_task_instance):
         ti = create_task_instance(dag_id='dag', task_id='op', execution_date=timezone.datetime(2018, 1, 1))
 
@@ -1301,6 +1302,7 @@ class TestTaskInstance:
             'execution_date=2018-01-01T00%3A00%3A00%2B00%3A00'
             '&task_id=op'
             '&dag_id=dag'
+            '&map_index=-1'
         )
         assert ti.log_url == expected_url
 
@@ -1312,7 +1314,8 @@ class TestTaskInstance:
         )
         assert query['dag_id'][0] == 'dag'
         assert query['task_id'][0] == 'op'
-        assert pendulum.parse(query['execution_date'][0]) == now
+        assert query['dag_run_id'][0] == 'test'
+        assert ti.execution_date == now
 
     def test_overwrite_params_with_dag_run_conf(self, create_task_instance):
         ti = create_task_instance()
@@ -2688,6 +2691,7 @@ class TestMappedTaskInstanceReceiveValue:
         ti.run()
 
         show_task = dag.get_task("show")
+        assert show_task.parse_time_mapped_ti_count is None
         mapped_tis, num = show_task.expand_mapped_task(dag_run.run_id, session=session)
         assert num == len(mapped_tis) == 4
 
@@ -2695,6 +2699,41 @@ class TestMappedTaskInstanceReceiveValue:
             ti.refresh_from_task(show_task)
             ti.run()
         assert outputs == [(1, 1), (1, 2), (2, 1), (2, 2)]
+
+    def test_map_literal_cross_product(self, dag_maker, session):
+        """Test a mapped task with literal cross product args expand properly."""
+        outputs = []
+
+        with dag_maker(dag_id="product_same_types", session=session) as dag:
+
+            @dag.task
+            def show(a, b):
+                outputs.append((a, b))
+
+            show.expand(a=[2, 4, 8], b=[5, 10])
+
+        dag_run = dag_maker.create_dagrun()
+
+        show_task = dag.get_task("show")
+        assert show_task.parse_time_mapped_ti_count == 6
+        mapped_tis, num = show_task.expand_mapped_task(dag_run.run_id, session=session)
+        assert len(mapped_tis) == 0  # Expanded at parse!
+        assert num == 6
+
+        tis = (
+            session.query(TaskInstance)
+            .filter(
+                TaskInstance.dag_id == dag.dag_id,
+                TaskInstance.task_id == 'show',
+                TaskInstance.run_id == dag_run.run_id,
+            )
+            .order_by(TaskInstance.map_index)
+            .all()
+        )
+        for ti in tis:
+            ti.refresh_from_task(show_task)
+            ti.run()
+        assert outputs == [(2, 5), (2, 10), (4, 5), (4, 10), (8, 5), (8, 10)]
 
     def test_map_in_group(self, tmp_path: pathlib.Path, dag_maker, session):
         out = tmp_path.joinpath("out")
@@ -2740,7 +2779,9 @@ class TestMappedTaskInstanceReceiveValue:
 def test_ti_xcom_pull_on_mapped_operator_return_lazy_iterable(mock_deserialize_value, dag_maker, session):
     """Ensure we access XCom lazily when pulling from a mapped operator."""
     with dag_maker(dag_id="test_xcom", session=session):
-        task_1 = EmptyOperator.partial(task_id="task_1").expand()
+        # Use the private _expand() method to avoid the empty kwargs check.
+        # We don't care about how the operator runs here, only its presence.
+        task_1 = EmptyOperator.partial(task_id="task_1")._expand()
         EmptyOperator(task_id="task_2")
 
     dagrun = dag_maker.create_dagrun()
@@ -2794,3 +2835,60 @@ def test_ti_mapped_depends_on_mapped_xcom_arg(dag_maker, session):
 
     query = XCom.get_many(run_id=dagrun.run_id, task_ids=["add_one__1"], session=session)
     assert [x.value for x in query.order_by(None).order_by(XCom.map_index)] == [3, 4, 5]
+
+
+def test_ti_mapped_depends_on_mapped_xcom_arg_XXX(dag_maker, session):
+    with dag_maker(session=session) as dag:
+
+        @dag.task
+        def add_one(x):
+            x + 1
+
+        two_three_four = add_one.expand(x=[1, 2, 3])
+        add_one.expand(x=two_three_four)
+
+    dagrun = dag_maker.create_dagrun()
+    for map_index in range(3):
+        ti = dagrun.get_task_instance("add_one", map_index=map_index)
+        ti.refresh_from_task(dag.get_task("add_one"))
+        with pytest.raises(XComForMappingNotPushed):
+            ti.run()
+
+
+def test_expand_non_templated_field(dag_maker, session):
+    """Test expand on non-templated fields sets upstream deps properly."""
+
+    class SimpleBashOperator(BashOperator):
+        template_fields = ()
+
+    with dag_maker(dag_id="product_same_types", session=session) as dag:
+
+        @dag.task
+        def get_extra_env():
+            return [{"foo": "bar"}, {"foo": "biz"}]
+
+        SimpleBashOperator.partial(task_id="echo", bash_command="echo $FOO").expand(env=get_extra_env())
+
+    dag_maker.create_dagrun()
+
+    echo_task = dag.get_task("echo")
+    assert "get_extra_env" in echo_task.upstream_task_ids
+
+
+def test_executor_config_comparator():
+    """
+    When comparison raises AttributeError, return False.
+    This can happen when executor config contains kubernetes objects pickled
+    under older kubernetes library version.
+    """
+
+    class MockAttrError:
+        def __eq__(self, other):
+            raise AttributeError('hello')
+
+    a = MockAttrError()
+    with pytest.raises(AttributeError):
+        # just verify for ourselves that this throws
+        assert a == a
+    assert _executor_config_comparator(a, a) is False
+    assert _executor_config_comparator('a', 'a') is True
