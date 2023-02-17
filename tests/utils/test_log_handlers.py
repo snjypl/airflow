@@ -357,7 +357,7 @@ class TestFileTaskLogHandler:
         set_context(logger, ti)
         ti.run(ignore_ti_state=True)
         ti.state = TaskInstanceState.RUNNING
-        file_handler.read(ti, 3)
+        file_handler.read(ti, 2)
 
         # first we find pod name
         mock_list_pod.assert_called_once()
@@ -372,7 +372,7 @@ class TestFileTaskLogHandler:
                     "kubernetes_executor=True",
                     "run_id=manual__2016-01-01T0000000000-2b88d1d57",
                     "task_id=task_for_testing_file_log_handler",
-                    "try_number=.+?",
+                    "try_number=2",
                     "airflow-worker",
                 ]
             ),
