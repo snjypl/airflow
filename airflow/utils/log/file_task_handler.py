@@ -24,7 +24,7 @@ import warnings
 from contextlib import suppress
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Protocol
 from urllib.parse import urljoin
 
 import pendulum
@@ -44,6 +44,13 @@ if TYPE_CHECKING:
     from airflow.models import TaskInstance
 
 logger = logging.getLogger(__name__)
+
+
+class GetTaskLogProtocol(Protocol):
+    """Type Protocol for BaseExecutor.get_task_log"""
+
+    def __call__(self, ti: TaskInstance, try_number: int) -> tuple[list[str], list[str]]:
+        ...
 
 
 class LogType(str, Enum):
@@ -266,7 +273,7 @@ class FileTaskHandler(logging.Handler):
         return False
 
     @cached_property
-    def _executor_get_task_log(self) -> Callable[[TaskInstance], tuple[list[str], list[str]]]:
+    def _executor_get_task_log(self) -> GetTaskLogProtocol:
         """This cached property avoids loading executor repeatedly."""
         executor = ExecutorLoader.get_default_executor()
         return executor.get_task_log
